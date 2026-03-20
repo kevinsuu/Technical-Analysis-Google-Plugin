@@ -270,41 +270,14 @@
 
         activePeriod = period;
 
-        // 注入 <script> 到頁面 context 執行 TradingView API（content script 無法存取 page JS）
-        injectPageScript(`
-          (function() {
-            // 方法1：TradingView Widget API
-            if (window.tvWidget) {
-              try { window.tvWidget.activeChart().setResolution("${resolution}"); return; } catch(e) {}
-            }
-            // 方法2：遍歷所有 iframe 尋找 tvWidget
-            try {
-              var frames = document.querySelectorAll('iframe');
-              for (var i = 0; i < frames.length; i++) {
-                try {
-                  var fw = frames[i].contentWindow;
-                  if (fw && fw.tvWidget) {
-                    fw.tvWidget.activeChart().setResolution("${resolution}");
-                    return;
-                  }
-                } catch(e) {}
-              }
-            } catch(e) {}
-            // 方法3：群益 POST 切換（設定 server session）後重載
-            if (location.hostname.includes('capital.com.tw')) {
-              var fd = new FormData();
-              fd.append('s', '${currentStockCode}');
-              fd.append('period', '${period}');
-              fd.append('m', '0');
-              fetch('/Public/Ajax/KLine.ashx', { method: 'POST', body: fd })
-                .then(function() { location.reload(); });
-              return;
-            }
-            // 方法4：模擬點擊 DOM 上的週期按鈕
-            var btn = document.querySelector('[data-value="${resolution}"], [data-resolution="${resolution}"]');
-            if (btn) btn.click();
-          })();
-        `);
+        // 透過 service worker 在頁面 MAIN world 執行（繞過 CSP 限制）
+        chrome.runtime.sendMessage({
+          type: 'EXEC_IN_PAGE',
+          action: 'CHANGE_RESOLUTION',
+          resolution,
+          period,
+          stockCode: currentStockCode,
+        });
 
         expandedTimeframeCode = null;
         render();
@@ -503,13 +476,6 @@
   }
 
   // ===== 工具 =====
-  function injectPageScript(code) {
-    const s = document.createElement('script');
-    s.textContent = code;
-    (document.head || document.documentElement).appendChild(s);
-    s.remove();
-  }
-
   function extractStockCodeFromUrl() {
     try {
       const url = window.location.href;

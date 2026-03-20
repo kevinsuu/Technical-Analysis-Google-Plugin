@@ -49,6 +49,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     REORDER_WATCHLIST: handleReorderWatchlist,
     // ===== 股票搜尋 =====
     SEARCH_STOCKS: handleSearchStocks,
+    // ===== 頁面 Context 執行（繞過 CSP） =====
+    EXEC_IN_PAGE: handleExecInPage,
   };
 
   const handler = handlers[message.type];
@@ -317,6 +319,76 @@ async function handleSearchStocks(message) {
   }
 
   return { success: true, results };
+}
+
+// ===== 頁面 Context 執行 =====
+
+async function handleExecInPage(message, sender) {
+  const tabId = sender.tab?.id;
+  if (!tabId) return { success: false, error: 'no tab' };
+
+  const { action, resolution, period, stockCode } = message;
+
+  if (action === 'CHANGE_RESOLUTION') {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: (res, per, code) => {
+          // 方法1：TradingView Widget API（主頁面）
+          if (window.tvWidget) {
+            try { window.tvWidget.activeChart().setResolution(res); return; } catch (e) {}
+          }
+          // 方法2：遍歷所有可能的 TradingView 全域變數
+          const possibleNames = ['tvWidget', 'widget', 'tvwidget', 'TradingView', '_tv'];
+          for (const name of possibleNames) {
+            const w = window[name];
+            if (w && typeof w.activeChart === 'function') {
+              try { w.activeChart().setResolution(res); return; } catch (e) {}
+            }
+          }
+          // 方法3：尋找 iframe 中的 tvWidget
+          try {
+            const frames = document.querySelectorAll('iframe');
+            for (const frame of frames) {
+              try {
+                const fw = frame.contentWindow;
+                if (fw?.tvWidget) {
+                  fw.tvWidget.activeChart().setResolution(res);
+                  return;
+                }
+              } catch (e) {}
+            }
+          } catch (e) {}
+          // 方法4：模擬點擊頁面上的週期按鈕
+          const selectors = [
+            `[data-value="${res}"]`,
+            `[data-resolution="${res}"]`,
+            `[data-period="${per}"]`,
+          ];
+          for (const sel of selectors) {
+            const btn = document.querySelector(sel);
+            if (btn) { btn.click(); return; }
+          }
+          // 方法5：群益 POST + 重載
+          if (location.hostname.includes('capital.com.tw') && code) {
+            const fd = new FormData();
+            fd.append('s', code);
+            fd.append('period', per);
+            fd.append('m', '0');
+            fetch('/Public/Ajax/KLine.ashx', { method: 'POST', body: fd })
+              .then(() => location.reload());
+          }
+        },
+        args: [resolution, period, stockCode],
+      });
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  return { success: false, error: 'unknown action' };
 }
 
 // ===== 工具函式 =====
