@@ -1,0 +1,85 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Trading Remote - 萬用看盤遙控器",
+  "version": "1.1.0",
+  "description": "跨券商統一操作技術分析切換、個股跳轉的懸浮遙控面板",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.capital.com.tw/*",
+    "https://*.yuanta.com.tw/*",
+    "https://*.kgieworld.com.tw/*",
+    "https://*.fbs.com.tw/*",
+    "https://*.sinotrade.com.tw/*",
+    "https://*.cathaysec.com.tw/*",
+    "https://*.fugle.tw/*",
+    "https://*.tssco.com.tw/*",
+    "https://*.ibfs.com.tw/*",
+    "https://*.emega.com.tw/*",
+    "https://*.skis.com.tw/*",
+    "https://openapi.twse.com.tw/*",
+    "https://www.tpex.org.tw/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.capital.com.tw/*",
+        "https://*.yuanta.com.tw/*",
+        "https://*.kgieworld.com.tw/*",
+        "https://*.fbs.com.tw/*",
+        "https://*.sinotrade.com.tw/*",
+        "https://*.cathaysec.com.tw/*",
+        "https://*.fugle.tw/*",
+        "https://*.tssco.com.tw/*",
+        "https://*.ibfs.com.tw/*",
+        "https://*.emega.com.tw/*",
+        "https://*.skis.com.tw/*"
+      ],
+      "js": [
+        "content/executor.js",
+        "content/injector.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_page": "options/options.html",
+  "action": {
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    },
+    "default_title": "UTR 萬用看盤遙控器"
+  },
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["ui/panel.html", "ui/panel.css", "assets/*"],
+      "matches": [
+        "https://*.capital.com.tw/*",
+        "https://*.yuanta.com.tw/*",
+        "https://*.kgieworld.com.tw/*",
+        "https://*.fbs.com.tw/*",
+        "https://*.sinotrade.com.tw/*",
+        "https://*.cathaysec.com.tw/*",
+        "https://*.fugle.tw/*",
+        "https://*.tssco.com.tw/*",
+        "https://*.ibfs.com.tw/*",
+        "https://*.emega.com.tw/*",
+        "https://*.skis.com.tw/*"
+      ]
+    }
+  ]
+}

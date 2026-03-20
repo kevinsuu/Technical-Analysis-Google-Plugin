@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>UTR 設定 - 萬用看盤遙控器</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0a0a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #e94560;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 24px;
+      border-bottom: 2px solid #16213e;
+    }
+
+    .tab {
+      padding: 10px 20px;
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .tab:hover { color: #e0e0e0; }
+    .tab.active {
+      color: #e94560;
+      border-bottom-color: #e94560;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards */
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #16213e;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #e94560;
+    }
+
+    /* Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid #16213e;
+    }
+
+    td {
+      padding: 8px 12px;
+      font-size: 13px;
+      border-bottom: 1px solid #0f3460;
+      vertical-align: middle;
+    }
+
+    td code {
+      background: #0a0a1a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #4fc3f7;
+    }
+
+    /* Forms */
+    .form-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+      align-items: flex-end;
+    }
+
+    .form-group {
+      flex: 1;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    input[type="text"], select, textarea {
+      width: 100%;
+      padding: 8px 12px;
+      background: #0a0a1a;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: #e94560;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: monospace;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background: #e94560;
+      color: white;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: #c73652; }
+
+    .btn-secondary {
+      background: #16213e;
+      color: #ccc;
+      border: 1px solid #0f3460;
+    }
+    .btn-secondary:hover { background: #0f3460; }
+
+    .btn-danger {
+      background: transparent;
+      color: #e94560;
+      border: 1px solid #e94560;
+    }
+    .btn-danger:hover { background: rgba(233,69,96,0.1); }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      background: #0f3460;
+      color: #4fc3f7;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #4CAF50;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s;
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    /* JSON Editor */
+    #json-editor {
+      width: 100%;
+      min-height: 400px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      tab-size: 2;
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 32px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>UTR 萬用看盤遙控器</h1>
+    <p class="subtitle">管理各券商的 DOM Selector 對應設定</p>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="brokers">券商設定</button>
+      <button class="tab" data-tab="add-broker">新增券商</button>
+      <button class="tab" data-tab="json">JSON 編輯</button>
+      <button class="tab" data-tab="about">關於</button>
+    </div>
+
+    <!-- 券商設定 -->
+    <div class="tab-content active" id="tab-brokers">
+      <div id="broker-list"></div>
+    </div>
+
+    <!-- 新增券商 -->
+    <div class="tab-content" id="tab-add-broker">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:16px">新增券商</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>網域 (Domain)</label>
+            <input type="text" id="new-domain" placeholder="例如: tradeweb.capital.com.tw">
+          </div>
+          <div class="form-group">
+            <label>券商名稱</label>
+            <input type="text" id="new-name" placeholder="例如: 群益證券">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>個股 URL 範本（{code} 代表股票代碼）</label>
+            <input type="text" id="new-url-pattern" placeholder="例如: https://tradeweb.capital.com.tw/TradingViewChart/KlineChart.aspx?s={code}">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-add-broker">新增</button>
+      </div>
+    </div>
+
+    <!-- JSON 編輯 -->
+    <div class="tab-content" id="tab-json">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">原始 JSON 設定</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" id="btn-json-format">格式化</button>
+            <button class="btn btn-primary btn-sm" id="btn-json-save">儲存</button>
+          </div>
+        </div>
+        <textarea id="json-editor"></textarea>
+      </div>
+    </div>
+
+    <!-- 關於 -->
+    <div class="tab-content" id="tab-about">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Universal Trading Remote v1.0.0</div>
+        <p style="color:#888;line-height:1.6">
+          跨券商統一操作的懸浮遙控面板。<br>
+          支援技術分析切換、個股跳轉、自訂動作錄製。
+        </p>
+        <br>
+        <p style="color:#555;font-size:12px">
+          使用方式：前往支援的券商網頁後，點擊瀏覽器工具列的 UTR 圖示即可開啟遙控面板。<br>
+          透過「錄製模式」可快速新增自訂按鈕。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

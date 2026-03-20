@@ -1,0 +1,87 @@
+/* UTR Panel - Popup 模式樣式（備用） */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 240px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
+
+#utr-popup-panel {
+  width: 100%;
+}
+
+.utr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+}
+
+.utr-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #e94560;
+}
+
+.utr-body {
+  padding: 10px 12px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.utr-notice {
+  color: #888;
+  text-align: center;
+  padding: 12px 0;
+}
+
+.utr-group {
+  margin-bottom: 10px;
+}
+
+.utr-group-title {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #16213e;
+}
+
+.utr-group-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.utr-btn {
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.utr-btn--action {
+  background: #16213e;
+  color: #ccc;
+  padding: 5px 10px;
+  border: 1px solid #0f3460;
+}
+
+.utr-btn--action:hover {
+  background: #0f3460;
+  color: #fff;
+  border-color: #e94560;
+}

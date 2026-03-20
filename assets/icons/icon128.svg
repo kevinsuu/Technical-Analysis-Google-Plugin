@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a1a3e"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#4ade80"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#f87171"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#6366f1" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+
+  <!-- 微光邊框 -->
+  <rect x="1.5" y="1.5" width="125" height="125" rx="26.5" fill="none" stroke="url(#glow)" stroke-width="1.5" opacity="0.35"/>
+
+  
+  <!-- 網格線 -->
+  <line x1="24" y1="36" x2="104" y2="36" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+  <line x1="24" y1="56" x2="104" y2="56" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+  <line x1="24" y1="76" x2="104" y2="76" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+  <line x1="24" y1="96" x2="104" y2="96" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+
+  <!-- K 線蠟燭 -->
+  <!-- 紅K (跌) -->
+  <line x1="34" y1="52" x2="34" y2="90" stroke="url(#red)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="29" y="60" width="10" height="22" rx="2" fill="url(#red)"/>
+
+  <!-- 綠K (漲) -->
+  <line x1="52" y1="44" x2="52" y2="86" stroke="url(#green)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="47" y="50" width="10" height="28" rx="2" fill="url(#green)"/>
+
+  <!-- 紅K (跌) -->
+  <line x1="70" y1="48" x2="70" y2="82" stroke="url(#red)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="65" y="54" width="10" height="18" rx="2" fill="url(#red)"/>
+
+  <!-- 綠K (漲) — 最高 -->
+  <line x1="88" y1="28" x2="88" y2="70" stroke="url(#green)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="83" y="34" width="10" height="28" rx="2" fill="url(#green)"/>
+
+  <!-- 趨勢線 -->
+  <path d="M 28 78 Q 50 68, 64 72 T 98 42" stroke="url(#glow)" stroke-width="2.5" stroke-linecap="round" fill="none" filter="url(#shadow)" opacity="0.8"/>
+
+  <!-- UTR 文字標記 -->
+  <text x="64" y="112" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="-apple-system, BlinkMacSystemFont, Arial, sans-serif" font-weight="700" font-size="14" letter-spacing="3">UTR</text>
+  
+</svg>
