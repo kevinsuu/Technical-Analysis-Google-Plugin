@@ -29,6 +29,16 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     await chrome.storage.local.remove('stockListCache');
     console.log('[UTR] 版本更新，已清除股票清單快取');
   }
+
+  // 啟動價格提醒定時檢查（每 1 分鐘）
+  chrome.alarms.create('price-alert-check', { periodInMinutes: 1 });
+});
+
+// ===== 價格提醒定時檢查 =====
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'price-alert-check') {
+    await checkPriceAlerts();
+  }
 });
 
 // ===== 訊息路由 =====
@@ -59,6 +69,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     LOOKUP_STOCK: handleLookupStock,
     // ===== 頁面 Context 執行（繞過 CSP） =====
     EXEC_IN_PAGE: handleExecInPage,
+    // ===== 價格提醒 =====
+    GET_PRICE_ALERTS: handleGetPriceAlerts,
+    ADD_PRICE_ALERT: handleAddPriceAlert,
+    REMOVE_PRICE_ALERT: handleRemovePriceAlert,
+    CLEAR_TRIGGERED_ALERTS: handleClearTriggeredAlerts,
   };
 
   const handler = handlers[message.type];
@@ -631,4 +646,182 @@ function getDefaultConfigs() {
       actions: [],
     },
   };
+}
+
+// ===== 價格提醒 =====
+// alert 結構: { id, code, name, condition: 'above'|'below', price, triggered, triggeredAt, createdAt }
+
+async function handleGetPriceAlerts() {
+  const { priceAlerts } = await chrome.storage.local.get('priceAlerts');
+  return { success: true, alerts: priceAlerts || [] };
+}
+
+async function handleAddPriceAlert(message) {
+  const { code, name, condition, price } = message;
+  if (!code || !condition || !price) {
+    return { success: false, error: '缺少必要參數' };
+  }
+  const { priceAlerts } = await chrome.storage.local.get('priceAlerts');
+  const alerts = priceAlerts || [];
+
+  const alert = {
+    id: 'alert_' + Date.now(),
+    code,
+    name: name || code,
+    condition, // 'above' | 'below'
+    price: parseFloat(price),
+    triggered: false,
+    triggeredAt: null,
+    createdAt: Date.now(),
+  };
+  alerts.push(alert);
+  await chrome.storage.local.set({ priceAlerts: alerts });
+
+  // 確保 alarm 在運行
+  const existing = await chrome.alarms.get('price-alert-check');
+  if (!existing) {
+    chrome.alarms.create('price-alert-check', { periodInMinutes: 1 });
+  }
+
+  return { success: true, alerts };
+}
+
+async function handleRemovePriceAlert(message) {
+  const { alertId } = message;
+  const { priceAlerts } = await chrome.storage.local.get('priceAlerts');
+  const alerts = (priceAlerts || []).filter(a => a.id !== alertId);
+  await chrome.storage.local.set({ priceAlerts: alerts });
+  return { success: true, alerts };
+}
+
+async function handleClearTriggeredAlerts() {
+  const { priceAlerts } = await chrome.storage.local.get('priceAlerts');
+  const alerts = (priceAlerts || []).filter(a => !a.triggered);
+  await chrome.storage.local.set({ priceAlerts: alerts });
+  return { success: true, alerts };
+}
+
+// ===== 即時報價取得 =====
+
+async function fetchRealtimePrice(stockCode) {
+  // 使用 TWSE 即時報價 API（盤中）
+  try {
+    const tsResp = await fetch(
+      `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_${stockCode}.tw&json=1&delay=0`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (tsResp.ok) {
+      const data = await tsResp.json();
+      const info = data?.msgArray?.[0];
+      if (info) {
+        // z = 最新成交價, y = 昨收
+        const price = parseFloat(info.z);
+        if (!isNaN(price) && price > 0) {
+          return { price, prevClose: parseFloat(info.y) || null };
+        }
+        // 盤前/盤後可能沒有成交價，用昨收
+        const prevClose = parseFloat(info.y);
+        if (!isNaN(prevClose)) {
+          return { price: prevClose, prevClose };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[UTR] TWSE 即時報價失敗:', e);
+  }
+
+  // 備援：嘗試 TPEx（上櫃）
+  try {
+    const otcResp = await fetch(
+      `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=otc_${stockCode}.tw&json=1&delay=0`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (otcResp.ok) {
+      const data = await otcResp.json();
+      const info = data?.msgArray?.[0];
+      if (info) {
+        const price = parseFloat(info.z);
+        if (!isNaN(price) && price > 0) {
+          return { price, prevClose: parseFloat(info.y) || null };
+        }
+        const prevClose = parseFloat(info.y);
+        if (!isNaN(prevClose)) {
+          return { price: prevClose, prevClose };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[UTR] TPEx 即時報價失敗:', e);
+  }
+
+  return null;
+}
+
+// ===== 定時檢查價格提醒 =====
+
+async function checkPriceAlerts() {
+  const { priceAlerts } = await chrome.storage.local.get('priceAlerts');
+  if (!priceAlerts || priceAlerts.length === 0) return;
+
+  // 只檢查尚未觸發的提醒
+  const pending = priceAlerts.filter(a => !a.triggered);
+  if (pending.length === 0) return;
+
+  // 收集需要查詢的不重複股票代碼
+  const codes = [...new Set(pending.map(a => a.code))];
+
+  // 逐一查詢（避免 API 過快封鎖，間隔 300ms）
+  const priceMap = {};
+  for (const code of codes) {
+    const result = await fetchRealtimePrice(code);
+    if (result) priceMap[code] = result;
+    if (codes.length > 1) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+
+  let changed = false;
+  for (const alert of priceAlerts) {
+    if (alert.triggered) continue;
+    const priceData = priceMap[alert.code];
+    if (!priceData) continue;
+
+    const currentPrice = priceData.price;
+    let shouldTrigger = false;
+
+    if (alert.condition === 'above' && currentPrice >= alert.price) {
+      shouldTrigger = true;
+    } else if (alert.condition === 'below' && currentPrice <= alert.price) {
+      shouldTrigger = true;
+    }
+
+    if (shouldTrigger) {
+      alert.triggered = true;
+      alert.triggeredAt = Date.now();
+      alert.triggeredPrice = currentPrice;
+      changed = true;
+
+      // 發送 Chrome 通知
+      const direction = alert.condition === 'above' ? '突破' : '跌破';
+      chrome.notifications.create(alert.id, {
+        type: 'basic',
+        iconUrl: 'assets/icons/icon128.png',
+        title: `${alert.name} (${alert.code}) 價格提醒`,
+        message: `目前價格 ${currentPrice} 已${direction}設定價格 ${alert.price}`,
+        priority: 2,
+        requireInteraction: true,
+      });
+    }
+  }
+
+  if (changed) {
+    await chrome.storage.local.set({ priceAlerts });
+    // 通知所有面板更新提醒狀態
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      try {
+        chrome.tabs.sendMessage(tab.id, { type: 'PRICE_ALERTS_UPDATED', alerts: priceAlerts });
+      } catch {}
+    }
+  }
 }

@@ -8,6 +8,34 @@
   // 只在最上層視窗注入，iframe 不注入
   if (window !== window.top) return;
 
+  // ===== 安全 API 呼叫（擴充重載後 context 會失效） =====
+  function isContextValid() {
+    try { return !!chrome.runtime?.id; } catch { return false; }
+  }
+
+  function safeSendMessage(msg) {
+    if (!isContextValid()) return Promise.resolve(null);
+    try {
+      return chrome.runtime.sendMessage(msg).catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  }
+
+  function safeStorageGet(key) {
+    if (!isContextValid()) return Promise.resolve({});
+    try {
+      return chrome.storage.local.get(key).catch(() => ({}));
+    } catch {
+      return Promise.resolve({});
+    }
+  }
+
+  function safeStorageSet(obj) {
+    if (!isContextValid()) return;
+    try { chrome.storage.local.set(obj); } catch {}
+  }
+
   // 若已存在（擴充重載後重新注入），移除舊的再重建
   const oldRoot = document.getElementById('utr-root');
   if (oldRoot) oldRoot.remove();
@@ -26,6 +54,9 @@
   let dragState = null; // 拖曳排序狀態
   let tfSectionExpanded = false; // 時區區塊是否展開（預設摺疊）
   let activeTab = null; // 當前展開的分頁（'分' | '小時' | '天' | null）
+  let priceAlerts = []; // 價格提醒清單
+  let alertSectionExpanded = false; // 提醒區塊是否展開
+  let showAddAlertForm = false; // 是否顯示新增提醒表單
 
   // 時間週期選項，按分組排列（period = 群益 KLine.ashx 的 period 參數）
   const TIMEFRAME_GROUPS = [
@@ -83,16 +114,18 @@
   document.documentElement.appendChild(host);
 
   // ===== 初始化 =====
-  init();
+  init().catch(() => {});
 
   async function init() {
-    const [configResp, watchlistResp, panelState] = await Promise.all([
-      chrome.runtime.sendMessage({ type: 'GET_CONFIG', url: window.location.href }),
-      chrome.runtime.sendMessage({ type: 'GET_WATCHLIST' }),
-      chrome.storage.local.get('panelExpanded'),
+    const [configResp, watchlistResp, panelState, alertsResp] = await Promise.all([
+      safeSendMessage({ type: 'GET_CONFIG', url: window.location.href }),
+      safeSendMessage({ type: 'GET_WATCHLIST' }),
+      safeStorageGet('panelExpanded'),
+      safeSendMessage({ type: 'GET_PRICE_ALERTS' }),
     ]);
     watchlist = watchlistResp?.watchlist || [];
     config = configResp?.config;
+    priceAlerts = alertsResp?.alerts || [];
     // 還原面板展開狀態
     if (panelState.panelExpanded === true) {
       isExpanded = true;
@@ -103,7 +136,7 @@
 
     // 非同步查詢目前股票名稱（不阻塞初始渲染）
     if (currentStockCode) {
-      chrome.runtime.sendMessage({ type: 'LOOKUP_STOCK', code: currentStockCode }).then(resp => {
+      safeSendMessage({ type: 'LOOKUP_STOCK', code: currentStockCode }).then(resp => {
         if (resp?.success && resp.name) {
           currentStockName = resp.name;
           render();
@@ -113,17 +146,22 @@
   }
 
   // ===== 來自 background 的切換 =====
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === 'TOGGLE_PANEL') {
-      // 如果已關閉，重新顯示
-      if (panel.classList.contains('utr-panel--closed')) {
-        panel.classList.remove('utr-panel--closed');
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg.type === 'TOGGLE_PANEL') {
+        if (panel.classList.contains('utr-panel--closed')) {
+          panel.classList.remove('utr-panel--closed');
+        }
+        isExpanded = !isExpanded;
+        render();
+        sendResponse({ ok: true });
       }
-      isExpanded = !isExpanded;
-      render();
-      sendResponse({ ok: true });
-    }
-  });
+      if (msg.type === 'PRICE_ALERTS_UPDATED') {
+        priceAlerts = msg.alerts || [];
+        render();
+      }
+    });
+  } catch {}
 
   // ===== 渲染 =====
   function render() {
@@ -239,6 +277,108 @@
       }
 
       html += `</div></div>`;
+
+      // ===== 價格提醒區塊 =====
+      const alertChevron = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="${alertSectionExpanded ? '18 15 12 9 6 15' : '6 9 12 15 18 9'}"/></svg>`;
+      const pendingAlerts = priceAlerts.filter(a => !a.triggered);
+      const triggeredAlerts = priceAlerts.filter(a => a.triggered);
+
+      html += `
+      <div class="utr-alert-section">
+        <div class="utr-alert-header" data-action="toggle-alert-section">
+          <div class="utr-alert-header-left">
+            <svg class="utr-alert-bell" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="utr-alert-title">價格提醒</span>
+            <span class="utr-bar-count">${pendingAlerts.length}</span>
+          </div>
+          <span class="utr-tf-toggle">${alertChevron}</span>
+        </div>`;
+
+      if (alertSectionExpanded) {
+        html += `<div class="utr-alert-body">`;
+
+        // 新增提醒按鈕或表單
+        if (showAddAlertForm) {
+          const alertCode = currentStockCode || '';
+          const alertName = currentStockName || '';
+          html += `
+          <div class="utr-alert-form">
+            <div class="utr-alert-form-row">
+              <input class="utr-alert-input utr-alert-input--code" type="text" value="${alertCode}" placeholder="股票代碼" data-role="alert-code" />
+              <span class="utr-alert-form-name" data-role="alert-name-display">${alertName}</span>
+            </div>
+            <div class="utr-alert-form-row">
+              <select class="utr-alert-select" data-role="alert-condition">
+                <option value="above">突破 ≥</option>
+                <option value="below">跌破 ≤</option>
+              </select>
+              <input class="utr-alert-input utr-alert-input--price" type="number" step="0.01" placeholder="目標價格" data-role="alert-price" />
+            </div>
+            <div class="utr-alert-form-actions">
+              <button class="utr-alert-form-btn utr-alert-form-btn--cancel" data-action="cancel-add-alert">取消</button>
+              <button class="utr-alert-form-btn utr-alert-form-btn--save" data-action="save-alert">新增</button>
+            </div>
+          </div>`;
+        } else {
+          html += `
+          <button class="utr-alert-add-btn" data-action="show-add-alert">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新增提醒
+          </button>`;
+        }
+
+        // 待觸發提醒
+        if (pendingAlerts.length > 0) {
+          for (const a of pendingAlerts) {
+            const condIcon = a.condition === 'above' ? '↑' : '↓';
+            const condClass = a.condition === 'above' ? 'utr-alert-cond--above' : 'utr-alert-cond--below';
+            html += `
+            <div class="utr-alert-item">
+              <div class="utr-alert-item-left">
+                <span class="utr-alert-item-code">${a.code}</span>
+                <span class="utr-alert-item-name">${a.name}</span>
+              </div>
+              <div class="utr-alert-item-right">
+                <span class="utr-alert-cond ${condClass}">${condIcon} ${a.price}</span>
+                <button class="utr-alert-item-del" data-action="remove-alert" data-alert-id="${a.id}" title="刪除提醒">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>`;
+          }
+        }
+
+        // 已觸發提醒
+        if (triggeredAlerts.length > 0) {
+          html += `<div class="utr-alert-triggered-header">
+            <span>已觸發</span>
+            <button class="utr-alert-clear-btn" data-action="clear-triggered-alerts">清除</button>
+          </div>`;
+          for (const a of triggeredAlerts) {
+            const condIcon = a.condition === 'above' ? '↑' : '↓';
+            const time = new Date(a.triggeredAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+            html += `
+            <div class="utr-alert-item utr-alert-item--triggered">
+              <div class="utr-alert-item-left">
+                <span class="utr-alert-item-code">${a.code}</span>
+                <span class="utr-alert-item-name">${a.name}</span>
+              </div>
+              <div class="utr-alert-item-right">
+                <span class="utr-alert-cond utr-alert-cond--triggered">${condIcon} ${a.price}</span>
+                <span class="utr-alert-time">${time}</span>
+              </div>
+            </div>`;
+          }
+        }
+
+        if (pendingAlerts.length === 0 && triggeredAlerts.length === 0 && !showAddAlertForm) {
+          html += `<div class="utr-empty" style="padding:12px">尚無價格提醒</div>`;
+        }
+
+        html += `</div>`;
+      }
+
+      html += `</div>`;
     }
 
     return html;
@@ -277,7 +417,7 @@
 
       if (action === 'toggle') {
         isExpanded = !isExpanded;
-        chrome.storage.local.set({ panelExpanded: isExpanded });
+        safeStorageSet({ panelExpanded: isExpanded });
         render();
         return;
       }
@@ -294,7 +434,7 @@
         // 嘗試從搜尋結果中找到對應的名稱
         const matched = searchResults.find(s => s.code === code);
         const name = matched?.name || code;
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await safeSendMessage({
           type: 'ADD_TO_WATCHLIST',
           stock: { code, name },
         });
@@ -311,7 +451,7 @@
       if (action === 'select-search-result') {
         const code = target.dataset.resultCode;
         const name = target.dataset.resultName;
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await safeSendMessage({
           type: 'ADD_TO_WATCHLIST',
           stock: { code, name },
         });
@@ -346,7 +486,7 @@
         activePeriod = period;
 
         // 透過 service worker 在頁面 MAIN world 執行（繞過 CSP 限制）
-        chrome.runtime.sendMessage({
+        safeSendMessage({
           type: 'EXEC_IN_PAGE',
           action: 'CHANGE_RESOLUTION',
           resolution,
@@ -361,12 +501,90 @@
       if (action === 'remove-watchlist') {
         e.stopPropagation();
         const code = target.dataset.code;
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await safeSendMessage({
           type: 'REMOVE_FROM_WATCHLIST',
           code,
         });
         if (resp?.success) {
           watchlist = resp.watchlist;
+          render();
+        }
+        return;
+      }
+
+      // ===== 價格提醒動作 =====
+      if (action === 'toggle-alert-section') {
+        alertSectionExpanded = !alertSectionExpanded;
+        render();
+        return;
+      }
+
+      if (action === 'show-add-alert') {
+        showAddAlertForm = true;
+        render();
+        // 自動 focus 價格欄位
+        setTimeout(() => {
+          const priceInput = panel.querySelector('[data-role="alert-price"]');
+          if (priceInput) priceInput.focus();
+        }, 50);
+        return;
+      }
+
+      if (action === 'cancel-add-alert') {
+        showAddAlertForm = false;
+        render();
+        return;
+      }
+
+      if (action === 'save-alert') {
+        const codeInput = panel.querySelector('[data-role="alert-code"]');
+        const condSelect = panel.querySelector('[data-role="alert-condition"]');
+        const priceInput = panel.querySelector('[data-role="alert-price"]');
+        const code = codeInput?.value?.trim();
+        const condition = condSelect?.value;
+        const price = priceInput?.value?.trim();
+
+        if (!code || !price) return;
+
+        // 查詢股票名稱
+        let name = code;
+        try {
+          const lookup = await safeSendMessage({ type: 'LOOKUP_STOCK', code });
+          if (lookup?.success && lookup.name) name = lookup.name;
+        } catch {}
+
+        const resp = await safeSendMessage({
+          type: 'ADD_PRICE_ALERT',
+          code, name, condition, price,
+        });
+        if (resp?.success) {
+          priceAlerts = resp.alerts;
+          showAddAlertForm = false;
+          render();
+        }
+        return;
+      }
+
+      if (action === 'remove-alert') {
+        e.stopPropagation();
+        const alertId = target.dataset.alertId;
+        const resp = await safeSendMessage({
+          type: 'REMOVE_PRICE_ALERT',
+          alertId,
+        });
+        if (resp?.success) {
+          priceAlerts = resp.alerts;
+          render();
+        }
+        return;
+      }
+
+      if (action === 'clear-triggered-alerts') {
+        const resp = await safeSendMessage({
+          type: 'CLEAR_TRIGGERED_ALERTS',
+        });
+        if (resp?.success) {
+          priceAlerts = resp.alerts;
           render();
         }
         return;
@@ -391,6 +609,24 @@
       }
     });
 
+    // 提醒代碼輸入事件（自動查詢名稱）
+    let alertCodeTimer = null;
+    panel.addEventListener('input', (e) => {
+      if (e.target.dataset.role === 'alert-code') {
+        clearTimeout(alertCodeTimer);
+        const code = e.target.value.trim();
+        const nameDisplay = panel.querySelector('[data-role="alert-name-display"]');
+        if (!code || !nameDisplay) return;
+        alertCodeTimer = setTimeout(async () => {
+          try {
+            const resp = await safeSendMessage({ type: 'LOOKUP_STOCK', code });
+            const el = panel.querySelector('[data-role="alert-name-display"]');
+            if (el) el.textContent = resp?.success ? resp.name : '';
+          } catch {}
+        }, 300);
+      }
+    });
+
     // 搜尋輸入事件（debounce）
     panel.addEventListener('input', (e) => {
       if (e.target.dataset.role !== 'stock-code') return;
@@ -404,15 +640,13 @@
       }
       searchDebounceTimer = setTimeout(async () => {
         try {
-          const resp = await chrome.runtime.sendMessage({ type: 'SEARCH_STOCKS', query });
+          const resp = await safeSendMessage({ type: 'SEARCH_STOCKS', query });
           if (resp?.success) {
             searchResults = resp.results;
             selectedResultIndex = -1;
             renderDropdown();
           }
-        } catch (err) {
-          console.warn('[UTR] 搜尋失敗:', err);
-        }
+        } catch {}
       }, 200);
     });
 
@@ -488,7 +722,7 @@
   }
 
   async function addStockFromSearch(code, name) {
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await safeSendMessage({
       type: 'ADD_TO_WATCHLIST',
       stock: { code, name },
     });
@@ -504,7 +738,7 @@
     const url = config?.stockUrlPattern?.replace('{code}', code);
     if (url) {
       // 跳轉前保存面板展開狀態
-      chrome.storage.local.set({ panelExpanded: isExpanded });
+      safeStorageSet({ panelExpanded: isExpanded });
       currentStockCode = code;
       window.location.href = url;
     }
@@ -638,7 +872,7 @@
 
       if (reordered.length === watchlist.length) {
         watchlist = reordered;
-        await chrome.runtime.sendMessage({
+        await safeSendMessage({
           type: 'REORDER_WATCHLIST',
           watchlist: reordered,
         });
@@ -1062,6 +1296,158 @@
       .utr-confirm-btn--ok:hover {
         background: rgba(239,68,68,0.25);
         color: #fca5a5;
+      }
+
+      /* ========== 價格提醒 ========== */
+      .utr-alert-section {
+        border-top: 1px solid rgba(255,255,255,0.05);
+      }
+      .utr-alert-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 12px; cursor: pointer; transition: background 0.15s;
+      }
+      .utr-alert-header:hover { background: rgba(255,255,255,0.03); }
+      .utr-alert-header-left {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .utr-alert-bell { color: rgba(255,255,255,0.3); }
+      .utr-alert-title {
+        font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.55);
+        letter-spacing: 0.3px;
+      }
+      .utr-alert-body {
+        padding: 0 10px 8px;
+        animation: utr-slideDown 0.15s ease;
+      }
+      .utr-alert-add-btn {
+        display: flex; align-items: center; justify-content: center; gap: 6px;
+        width: 100%; padding: 8px 0; border: 1px dashed rgba(255,255,255,0.1);
+        border-radius: 8px; background: transparent;
+        color: rgba(255,255,255,0.35); font-size: 12px; font-family: inherit;
+        cursor: pointer; transition: all 0.15s; margin-bottom: 6px;
+      }
+      .utr-alert-add-btn:hover {
+        border-color: rgba(251,191,36,0.4); color: #fbbf24;
+        background: rgba(251,191,36,0.05);
+      }
+
+      /* 新增提醒表單 */
+      .utr-alert-form {
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 10px; padding: 10px; margin-bottom: 6px;
+        animation: utr-slideDown 0.15s ease;
+      }
+      .utr-alert-form-row {
+        display: flex; gap: 6px; margin-bottom: 8px; align-items: center;
+      }
+      .utr-alert-input {
+        flex: 1; padding: 6px 10px; background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08); border-radius: 7px;
+        color: #e4e4e7; font-size: 13px; font-family: inherit; outline: none;
+        min-width: 0;
+      }
+      .utr-alert-input:focus {
+        border-color: rgba(251,191,36,0.4); background: rgba(255,255,255,0.06);
+      }
+      .utr-alert-input--code { max-width: 80px; font-family: "SF Mono", "Menlo", monospace; }
+      .utr-alert-input--price { font-variant-numeric: tabular-nums; }
+      .utr-alert-input::-webkit-inner-spin-button,
+      .utr-alert-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+      .utr-alert-form-name {
+        font-size: 12px; color: rgba(255,255,255,0.35); flex: 1;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .utr-alert-select {
+        padding: 6px 8px; background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08); border-radius: 7px;
+        color: #e4e4e7; font-size: 12px; font-family: inherit; outline: none;
+        cursor: pointer; min-width: 80px;
+      }
+      .utr-alert-select:focus { border-color: rgba(251,191,36,0.4); }
+      .utr-alert-select option { background: #1e1e22; color: #e4e4e7; }
+      .utr-alert-form-actions {
+        display: flex; gap: 6px; justify-content: flex-end;
+      }
+      .utr-alert-form-btn {
+        padding: 6px 14px; border-radius: 7px; border: none;
+        font-size: 12px; font-weight: 500; cursor: pointer;
+        transition: all 0.15s; font-family: inherit;
+      }
+      .utr-alert-form-btn--cancel {
+        background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
+      }
+      .utr-alert-form-btn--cancel:hover {
+        background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8);
+      }
+      .utr-alert-form-btn--save {
+        background: rgba(251,191,36,0.15); color: #fbbf24;
+      }
+      .utr-alert-form-btn--save:hover {
+        background: rgba(251,191,36,0.25); color: #fde68a;
+      }
+
+      /* 提醒項目 */
+      .utr-alert-item {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 10px; margin: 2px 0; border-radius: 8px;
+        transition: background 0.12s;
+      }
+      .utr-alert-item:hover { background: rgba(255,255,255,0.03); }
+      .utr-alert-item--triggered { opacity: 0.5; }
+      .utr-alert-item-left {
+        display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
+      }
+      .utr-alert-item-code {
+        font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.75);
+        font-family: "SF Mono", "Menlo", monospace; font-variant-numeric: tabular-nums;
+        min-width: 42px;
+      }
+      .utr-alert-item-name {
+        font-size: 11px; color: rgba(255,255,255,0.3);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .utr-alert-item-right {
+        display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+      }
+      .utr-alert-cond {
+        font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+        padding: 2px 6px; border-radius: 5px;
+      }
+      .utr-alert-cond--above {
+        color: #f87171; background: rgba(239,68,68,0.1);
+      }
+      .utr-alert-cond--below {
+        color: #60a5fa; background: rgba(59,130,246,0.1);
+      }
+      .utr-alert-cond--triggered {
+        color: rgba(255,255,255,0.35); background: rgba(255,255,255,0.05);
+      }
+      .utr-alert-time {
+        font-size: 11px; color: rgba(255,255,255,0.25);
+        font-variant-numeric: tabular-nums;
+      }
+      .utr-alert-item-del {
+        width: 20px; height: 20px; border-radius: 5px; border: none;
+        background: transparent; color: rgba(255,255,255,0.12);
+        cursor: pointer; display: flex; align-items: center; justify-content: center;
+        opacity: 0; transition: all 0.12s;
+      }
+      .utr-alert-item:hover .utr-alert-item-del { opacity: 1; }
+      .utr-alert-item-del:hover {
+        background: rgba(239,68,68,0.1); color: #f87171;
+      }
+      .utr-alert-triggered-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 6px 10px 2px; margin-top: 4px;
+        font-size: 11px; color: rgba(255,255,255,0.2); font-weight: 500;
+      }
+      .utr-alert-clear-btn {
+        background: none; border: none; color: rgba(255,255,255,0.2);
+        font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+        font-family: inherit; transition: all 0.15s;
+      }
+      .utr-alert-clear-btn:hover {
+        color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.05);
       }
     `;
   }

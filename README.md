@@ -4,18 +4,29 @@ Chrome 擴充功能，在證券網頁上提供持久化的懸浮遙控面板，�
 
 ## 功能特色
 
-- **懸浮遙控面板** — Shadow DOM 隔離，不受券商網頁樣式影響
-- **K 線週期快切** — 一鍵切換 1分/5分/15分/30分/60分/日/週/月 K 線
-- **技術指標開關** — MA、MACD、RSI、KDJ、布林通道、成交量等
-- **個股快速跳轉** — 輸入股票代碼直接切換
-- **動作錄製器** — 開啟錄製模式，點擊網頁元素自動擷取 CSS Selector
-- **跨券商配置** — 可擴展支援多家券商的 DOM Selector 映射
+- **懸浮遙控面板** — Shadow DOM (closed) 隔離，不受券商網頁樣式影響，支援拖曳移動
+- **K 線週期快切** — 分鐘 / 小時 / 天 三大分頁，涵蓋 16 種週期（1分～1月），透過 Service Worker 在頁面 MAIN world 繞過 CSP 執行
+- **個股搜尋與自動完成** — 即時搜尋上市 (TWSE) + 上櫃 (TPEx) 全股票，支援代碼或中文名稱，200ms 防抖、鍵盤上下選取
+- **觀察清單** — 持久化觀察清單，支援新增/移除/拖曳排序，點擊一鍵跳轉個股
+- **動作錄製器** — 開啟錄製模式，點擊網頁元素自動擷取 CSS Selector，儲存為自訂動作
+- **跨券商配置** — 內建 11 家台灣券商設定，可透過 Options 頁面或 JSON 編輯自行擴展
+- **自動版本管理** — Webpack 建構時根據 Git commit 次數自動更新 manifest 版本號
 
 ## 目前支援券商
 
-| 券商 | 網域 | 備註 |
+| 券商 | 網域 | 類別 |
 |------|------|------|
-| 群益證券 | `tradeweb.capital.com.tw` | 基於 TradingView 圖表 |
+| 群益證券 | `tradeweb.capital.com.tw` | 市場領先 |
+| 元大證券 | `ytdf.yuanta.com.tw` | 市場領先 |
+| 凱基證券 | `h5webtrade.kgieworld.com.tw` | 市場領先 |
+| 富邦證券 | `fubon-ebrokerdj.fbs.com.tw` | 市場領先 |
+| 永豐金證券 | `stockchannelnew.sinotrade.com.tw` / `www.sinotrade.com.tw` | 市場領先 |
+| 國泰證券 | `djinfo.cathaysec.com.tw` / `www.cathaysec.com.tw` | 市場領先 |
+| 富果 Fugle | `www.fugle.tw` | 銀行兼營 |
+| 台新證券 | `tssweb.tssco.com.tw` / `www.tssco.com.tw` | 銀行兼營 |
+| 國票證券 | `www.ibfs.com.tw` | 銀行兼營 |
+| 兆豐證券 | `moneydj.emega.com.tw` / `www.emega.com.tw` | 銀行兼營 |
+| 新光證券 | `www.skis.com.tw` | 銀行兼營 |
 
 > 透過錄製器或 Options 頁面可自行新增其他券商。
 
@@ -23,16 +34,28 @@ Chrome 擴充功能，在證券網頁上提供持久化的懸浮遙控面板，�
 
 ```
 Chrome Extension Manifest V3
-├── Background Service Worker  — 標籤頁監控、跨頁通訊、設定管理
+├── Background Service Worker  — 標籤頁監控、跨頁通訊、設定管理、股票清單快取
+│                                 頁面 Context 執行（MAIN world，繞過 CSP）
 ├── Content Scripts
-│   ├── injector.js            — Shadow DOM 注入懸浮面板
-│   ├── executor.js            — 頁面 Context 中執行 DOM 操作
-│   └── recorder.js            — 錄製模式邏輯
-├── UI Panel                   — 遙控器介面（注入至 Shadow DOM）
-├── Options Page               — 管理各券商 Selector 設定
+│   ├── injector.js            — Shadow DOM (closed) 注入懸浮面板
+│   ├── executor.js            — 頁面 Context DOM 操作（白名單函式）
+│   └── recorder.js            — 動態注入的錄製模式邏輯
+├── UI Panel                   — 觀察清單 + K 線週期 + 搜尋（注入至 Shadow DOM）
+├── Options Page               — 4 頁籤：券商設定 / 新增券商 / JSON 編輯 / 關於
 └── Utils
     └── selector-finder.js     — CSS Selector 自動產生器
 ```
+
+### 資料來源
+
+| 來源 | 用途 |
+|------|------|
+| TWSE OpenAPI `/v1/opendata/t187ap03_L` | 上市公司基本資料 |
+| TWSE OpenAPI `/v1/exchangeReport/STOCK_DAY_AVG_ALL` | 上市全證券（含 ETF） |
+| TPEx OpenAPI `/v1/mopsfin_t187ap03_O` | 上櫃公司基本資料 |
+| TPEx OpenAPI `/v1/tpex_mainboard_daily_close_quotes` | 上櫃全證券 |
+
+股票清單快取 7 天，擴充更新時自動清除快取。
 
 ## 環境需求
 
@@ -68,10 +91,19 @@ npm run build
 
 ### 5. 開始使用
 
-1. 前往群益證券看盤頁面：`https://tradeweb.capital.com.tw/TradingViewChart/KlineChart.aspx?s=2330`
+1. 前往任一支援的券商看盤頁面（例如群益證券）
 2. 點擊瀏覽器工具列的 UTR 圖示開啟遙控面板
-3. 使用面板上的按鈕切換 K 線週期或技術指標
-4. 輸入股票代碼（如 `2330`）並按 GO 跳轉
+3. 展開「目前股票」區塊切換 K 線週期
+4. 搜尋或輸入股票代碼加入觀察清單
+5. 點擊清單中的股票一鍵跳轉
+
+### 一鍵更新
+
+```bash
+bash update.sh
+```
+
+從 GitHub 拉取最新版本並重新建構。
 
 ## 錄製新動作
 
@@ -102,7 +134,9 @@ npm run build
 {
   "tradeweb.capital.com.tw": {
     "name": "群益證券",
+    "category": "市場領先",
     "stockUrlPattern": "https://tradeweb.capital.com.tw/TradingViewChart/KlineChart.aspx?s={code}",
+    "stockCodeParam": "s",
     "actions": [
       {
         "id": "period_5m",
@@ -121,22 +155,23 @@ npm run build
 
 ```
 /universal-trading-remote
-├── manifest.json                  # Chrome Extension 設定
+├── manifest.json                  # Chrome Extension 設定（Manifest V3）
 ├── package.json                   # Node.js 專案設定
-├── webpack.config.js              # Webpack 建構設定
+├── webpack.config.js              # Webpack 建構設定（含自動版本管理）
+├── update.sh                      # 一鍵更新腳本
 ├── src/
 │   ├── background/
 │   │   └── service-worker.js      # Background Service Worker
 │   ├── content/
 │   │   ├── injector.js            # Shadow DOM 注入面板
-│   │   ├── executor.js            # DOM 操作執行器
+│   │   ├── executor.js            # DOM 操作執行器（白名單）
 │   │   └── recorder.js            # 錄製模式
 │   ├── ui/
 │   │   ├── panel.html             # 面板 HTML（備用 popup）
 │   │   ├── panel.css              # 面板樣式
 │   │   └── panel.js               # 面板邏輯
 │   ├── options/
-│   │   ├── options.html           # 設定頁面
+│   │   ├── options.html           # 設定頁面（4 頁籤）
 │   │   └── options.js             # 設定邏輯
 │   └── utils/
 │       └── selector-finder.js     # CSS Selector 產生器
@@ -148,9 +183,9 @@ npm run build
 ## 安全性注意事項
 
 - **Shadow DOM 隔離**：面板使用 `closed` Shadow DOM，防止券商網頁存取或修改
-- **CSP 相容**：所有操作透過 Content Script 執行，不使用 `eval` 或內聯腳本
-- **腳本白名單**：`executor.js` 只允許執行預定義函式（toggleIndicator、changeResolution、changeSymbol）
-- **iframe 支援**：`manifest.json` 設定 `all_frames: true`，並在執行時嘗試穿透同源 iframe
+- **CSP 相容**：K 線週期切換透過 Service Worker `chrome.scripting.executeScript` 在 MAIN world 執行，無需 `eval` 或內聯腳本
+- **腳本白名單**：`executor.js` 只允許執行預定義函式（`toggleIndicator`、`changeResolution`、`changeSymbol`）
+- **最小權限**：`all_frames: false`，僅在最上層視窗注入面板
 
 ## 授權
 
