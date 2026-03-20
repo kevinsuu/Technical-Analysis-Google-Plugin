@@ -1,6 +1,18 @@
 const path = require('path');
+const { execSync } = require('child_process');
 const CopyPlugin = require('copy-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+
+function getAutoVersion() {
+  const pkg = require('./package.json');
+  const [major, minor] = pkg.version.split('.');
+  try {
+    const commitCount = execSync('git rev-list --count HEAD', { encoding: 'utf-8' }).trim();
+    return `${major}.${minor}.${commitCount}`;
+  } catch {
+    return pkg.version;
+  }
+}
 
 module.exports = {
   entry: {
@@ -30,7 +42,15 @@ module.exports = {
     }),
     new CopyPlugin({
       patterns: [
-        { from: 'manifest.json', to: 'manifest.json' },
+        {
+          from: 'manifest.json',
+          to: 'manifest.json',
+          transform(content) {
+            const manifest = JSON.parse(content.toString());
+            manifest.version = getAutoVersion();
+            return JSON.stringify(manifest, null, 2);
+          },
+        },
         { from: 'src/ui/panel.html', to: 'ui/panel.html' },
         { from: 'src/options/options.html', to: 'options/options.html' },
         { from: 'assets', to: 'assets' },

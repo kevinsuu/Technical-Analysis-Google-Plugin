@@ -23,6 +23,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     // 開啟 Options 頁面引導設定
     chrome.runtime.openOptionsPage();
   }
+
+  // 更新時清除股票清單快取，讓新 API 來源生效
+  if (details.reason === 'update') {
+    await chrome.storage.local.remove('stockListCache');
+    console.log('[UTR] 版本更新，已清除股票清單快取');
+  }
 });
 
 // ===== 訊息路由 =====
@@ -49,6 +55,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     REORDER_WATCHLIST: handleReorderWatchlist,
     // ===== 股票搜尋 =====
     SEARCH_STOCKS: handleSearchStocks,
+    // ===== 查詢單一股票名稱 =====
+    LOOKUP_STOCK: handleLookupStock,
     // ===== 頁面 Context 執行（繞過 CSP） =====
     EXEC_IN_PAGE: handleExecInPage,
   };
@@ -258,17 +266,23 @@ async function fetchAndCacheStockList() {
     return cached.list;
   }
 
+  const seen = new Set();
   const list = [];
 
+  function addItem(code, name, market) {
+    if (code && name && !seen.has(code)) {
+      seen.add(code);
+      list.push({ code, name, market });
+    }
+  }
+
   try {
-    // 上市股票 (TWSE)
+    // 上市股票 (TWSE) - 公司基本資料
     const twseResp = await fetch('https://openapi.twse.com.tw/v1/opendata/t187ap03_L');
     if (twseResp.ok) {
       const twseData = await twseResp.json();
       for (const item of twseData) {
-        const code = item['公司代號']?.trim();
-        const name = item['公司簡稱']?.trim();
-        if (code && name) list.push({ code, name, market: 'twse' });
+        addItem(item['公司代號']?.trim(), item['公司簡稱']?.trim(), 'twse');
       }
     }
   } catch (e) {
@@ -276,18 +290,44 @@ async function fetchAndCacheStockList() {
   }
 
   try {
-    // 上櫃股票 (TPEx)
+    // 上市 ETF / 所有證券（含 ETF、權證等）
+    const allResp = await fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_AVG_ALL');
+    if (allResp.ok) {
+      const allData = await allResp.json();
+      for (const item of allData) {
+        addItem(item['Code']?.trim(), item['Name']?.trim(), 'twse');
+      }
+    }
+  } catch (e) {
+    console.warn('[UTR] TWSE 全證券清單取得失敗:', e);
+  }
+
+  try {
+    // 上櫃股票 (TPEx) - 公司基本資料
     const tpexResp = await fetch('https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O');
     if (tpexResp.ok) {
       const tpexData = await tpexResp.json();
       for (const item of tpexData) {
-        const code = item['SecuritiesCompanyCode']?.trim();
-        const name = item['CompanyAbbreviation']?.trim();
-        if (code && name) list.push({ code, name, market: 'tpex' });
+        addItem(item['SecuritiesCompanyCode']?.trim(), item['CompanyAbbreviation']?.trim(), 'tpex');
       }
     }
   } catch (e) {
     console.warn('[UTR] TPEx 股票清單取得失敗:', e);
+  }
+
+  try {
+    // 上櫃 ETF / 所有證券
+    const tpexAllResp = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes');
+    if (tpexAllResp.ok) {
+      const tpexAllData = await tpexAllResp.json();
+      for (const item of tpexAllData) {
+        const code = (item['SecuritiesCompanyCode'] || item['Code'])?.trim();
+        const name = (item['CompanyName'] || item['Name'])?.trim();
+        addItem(code, name, 'tpex');
+      }
+    }
+  } catch (e) {
+    console.warn('[UTR] TPEx 全證券清單取得失敗:', e);
   }
 
   if (list.length > 0) {
@@ -319,6 +359,19 @@ async function handleSearchStocks(message) {
   }
 
   return { success: true, results };
+}
+
+async function handleLookupStock(message) {
+  const code = (message.code || '').trim();
+  if (!code) return { success: false };
+
+  const list = await fetchAndCacheStockList();
+  if (!list) return { success: false };
+
+  const stock = list.find(s => s.code === code);
+  return stock
+    ? { success: true, code: stock.code, name: stock.name }
+    : { success: false };
 }
 
 // ===== 頁面 Context 執行 =====

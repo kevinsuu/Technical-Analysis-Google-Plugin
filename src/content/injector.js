@@ -15,23 +15,51 @@
   // ===== 狀態 =====
   let watchlist = [];
   let currentStockCode = extractStockCodeFromUrl();
+  let currentStockName = '';
   let config = null;
   let isExpanded = false;
-  let expandedTimeframeCode = null; // 展開時間週期的股票代碼
+  // (per-stock timeframe bar removed — top-level timeframe section is sufficient)
   let searchResults = [];
   let selectedResultIndex = -1;
   let searchDebounceTimer = null;
   let activePeriod = null; // 當前選中的時間週期 period 值
+  let dragState = null; // 拖曳排序狀態
+  let tfSectionExpanded = false; // 時區區塊是否展開（預設摺疊）
+  let activeTab = null; // 當前展開的分頁（'分' | '小時' | '天' | null）
 
-  // 時間週期選項（period = 群益 KLine.ashx 的 period 參數）
-  const TIMEFRAMES = [
-    { resolution: '1',  label: '1分',  period: '1' },
-    { resolution: '5',  label: '5分',  period: '2' },
-    { resolution: '15', label: '15分', period: '3' },
-    { resolution: '30', label: '30分', period: '4' },
-    { resolution: '60', label: '60分', period: '5' },
-    { resolution: 'D',  label: '日',   period: '6' },
-    { resolution: 'W',  label: '週',   period: '7' },
+  // 時間週期選項，按分組排列（period = 群益 KLine.ashx 的 period 參數）
+  const TIMEFRAME_GROUPS = [
+    {
+      group: '分',
+      items: [
+        { resolution: '1',  label: '1 分鐘',  period: '1' },
+        { resolution: '3',  label: '3 分鐘',  period: '8' },
+        { resolution: '5',  label: '5 分鐘',  period: '2' },
+        { resolution: '10', label: '10 分鐘', period: '9' },
+        { resolution: '15', label: '15 分鐘', period: '3' },
+        { resolution: '20', label: '20 分鐘', period: '10' },
+        { resolution: '30', label: '30 分鐘', period: '4' },
+        { resolution: '45', label: '45 分鐘', period: '11' },
+        { resolution: '90', label: '90 分鐘', period: '12' },
+      ],
+    },
+    {
+      group: '小時',
+      items: [
+        { resolution: '60',  label: '1 小時', period: '5' },
+        { resolution: '120', label: '2 小時', period: '13' },
+        { resolution: '180', label: '3 小時', period: '14' },
+        { resolution: '240', label: '4 小時', period: '15' },
+      ],
+    },
+    {
+      group: '天',
+      items: [
+        { resolution: 'D', label: '1 天', period: '6' },
+        { resolution: 'W', label: '1 周', period: '7' },
+        { resolution: 'M', label: '1 月', period: '16' },
+      ],
+    },
   ];
 
   // ===== Shadow DOM =====
@@ -58,15 +86,30 @@
   init();
 
   async function init() {
-    const [configResp, watchlistResp] = await Promise.all([
+    const [configResp, watchlistResp, panelState] = await Promise.all([
       chrome.runtime.sendMessage({ type: 'GET_CONFIG', url: window.location.href }),
       chrome.runtime.sendMessage({ type: 'GET_WATCHLIST' }),
+      chrome.storage.local.get('panelExpanded'),
     ]);
     watchlist = watchlistResp?.watchlist || [];
     config = configResp?.config;
+    // 還原面板展開狀態
+    if (panelState.panelExpanded === true) {
+      isExpanded = true;
+    }
 
     render();
     bindEvents();
+
+    // 非同步查詢目前股票名稱（不阻塞初始渲染）
+    if (currentStockCode) {
+      chrome.runtime.sendMessage({ type: 'LOOKUP_STOCK', code: currentStockCode }).then(resp => {
+        if (resp?.success && resp.name) {
+          currentStockName = resp.name;
+          render();
+        }
+      }).catch(() => {});
+    }
   }
 
   // ===== 來自 background 的切換 =====
@@ -110,22 +153,39 @@
     `;
 
     if (isExpanded) {
-      // 時區切換區塊（直接顯示在標題列下方）
+      // 時區切換區塊（可摺疊，分頁 + 下拉選單）
       if (currentStockCode) {
-        const stockName = watchlist.find(s => s.code === currentStockCode)?.name || '';
+        const stockName = currentStockName || watchlist.find(s => s.code === currentStockCode)?.name || '';
+        const activeGroup = TIMEFRAME_GROUPS.find(g => g.group === activeTab);
+        const tfChevron = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="${tfSectionExpanded ? '18 15 12 9 6 15' : '6 9 12 15 18 9'}"/></svg>`;
         html += `
         <div class="utr-tf-section">
-          <div class="utr-tf-current">
-            <span class="utr-tf-current-label">目前股票</span>
-            <span class="utr-tf-current-code">${currentStockCode}${stockName ? ' ' + stockName : ''}</span>
+          <div class="utr-tf-header" data-action="toggle-tf-section">
+            <div class="utr-tf-header-left">
+              <span class="utr-tf-current-label">目前股票</span>
+              <span class="utr-tf-current-code">${currentStockCode}${stockName ? ' ' + stockName : ''}</span>
+            </div>
+            <span class="utr-tf-toggle">${tfChevron}</span>
           </div>
-          <div class="utr-tf-grid">
-            ${TIMEFRAMES.map(tf => `
-              <button class="utr-tf-grid-btn ${activePeriod === tf.period ? 'utr-tf-grid-btn--active' : ''}" data-action="change-timeframe" data-resolution="${tf.resolution}" data-period="${tf.period}">
-                ${tf.label}
-              </button>
-            `).join('')}
-          </div>
+          ${tfSectionExpanded ? `
+          <div class="utr-tf-body">
+            <div class="utr-tf-tabs">
+              ${TIMEFRAME_GROUPS.map(g => `
+                <button class="utr-tf-tab ${activeTab === g.group ? 'utr-tf-tab--active' : ''}" data-action="switch-tf-tab" data-group="${g.group}">
+                  ${g.group}
+                  <svg class="utr-tf-tab-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="${activeTab === g.group ? '18 15 12 9 6 15' : '6 9 12 15 18 9'}"/></svg>
+                </button>
+              `).join('')}
+            </div>
+            ${activeGroup ? `
+            <div class="utr-tf-dropdown-list">
+              ${activeGroup.items.map(tf => `
+                <div class="utr-tf-item ${activePeriod === tf.period ? 'utr-tf-item--active' : ''}" data-action="change-timeframe" data-resolution="${tf.resolution}" data-period="${tf.period}">
+                  ${tf.label}
+                </div>
+              `).join('')}
+            </div>` : ''}
+          </div>` : ''}
         </div>`;
       }
 
@@ -160,10 +220,12 @@
       } else {
         for (const stock of watchlist) {
           const isActive = stock.code === currentStockCode;
-          const isTfOpen = expandedTimeframeCode === stock.code;
           html += `
-          <div class="utr-item-wrap">
+          <div class="utr-item-wrap" data-drag-code="${stock.code}">
             <div class="utr-item ${isActive ? 'utr-item--active' : ''}" data-stock-code="${stock.code}">
+              <div class="utr-drag-handle" data-action="drag-handle">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="4" r="2"/><circle cx="16" cy="4" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="20" r="2"/><circle cx="16" cy="20" r="2"/></svg>
+              </div>
               <div class="utr-item-left">
                 <span class="utr-item-code">${stock.code}</span>
                 <span class="utr-item-name">${stock.name}</span>
@@ -172,10 +234,6 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-            ${isTfOpen ? `
-            <div class="utr-tf-bar">
-              ${TIMEFRAMES.map(tf => `<button class="utr-tf-btn" data-action="change-timeframe" data-resolution="${tf.resolution}" data-period="${tf.period}">${tf.label}</button>`).join('')}
-            </div>` : ''}
           </div>`;
         }
       }
@@ -215,8 +273,11 @@
 
       const action = target.dataset.action;
 
+      if (action === 'drag-handle') return;
+
       if (action === 'toggle') {
         isExpanded = !isExpanded;
+        chrome.storage.local.set({ panelExpanded: isExpanded });
         render();
         return;
       }
@@ -263,6 +324,20 @@
         return;
       }
 
+      if (action === 'toggle-tf-section') {
+        tfSectionExpanded = !tfSectionExpanded;
+        if (!tfSectionExpanded) activeTab = null;
+        render();
+        return;
+      }
+
+      if (action === 'switch-tf-tab') {
+        const group = target.dataset.group;
+        activeTab = activeTab === group ? null : group;
+        render();
+        return;
+      }
+
       if (action === 'change-timeframe') {
         e.stopPropagation();
         const resolution = target.dataset.resolution;
@@ -279,7 +354,6 @@
           stockCode: currentStockCode,
         });
 
-        expandedTimeframeCode = null;
         render();
         return;
       }
@@ -299,15 +373,8 @@
       }
 
       const stockCode = target.dataset.stockCode;
-      if (stockCode) {
-        if (stockCode === currentStockCode) {
-          // 當前股票：展開/收合時間週期選單
-          expandedTimeframeCode = expandedTimeframeCode === stockCode ? null : stockCode;
-          render();
-        } else {
-          // 其他股票：跳轉
-          navigateToStock(stockCode);
-        }
+      if (stockCode && stockCode !== currentStockCode) {
+        navigateToStock(stockCode);
       }
     });
 
@@ -368,9 +435,14 @@
         }
         if (e.key === 'Enter') {
           e.preventDefault();
-          const idx = selectedResultIndex >= 0 ? selectedResultIndex : 0;
-          const selected = searchResults[idx];
-          addStockFromSearch(selected.code, selected.name);
+          if (selectedResultIndex >= 0) {
+            const selected = searchResults[selectedResultIndex];
+            // 只填入搜尋框，不自動加入觀察清單
+            e.target.value = selected.code;
+            searchResults = [];
+            selectedResultIndex = -1;
+            renderDropdown();
+          }
           return;
         }
         if (e.key === 'Escape') {
@@ -388,6 +460,7 @@
     });
 
     enableDrag();
+    enableListReorder();
   }
 
   // 局部更新下拉選單（不重建整個面板，保留 input focus）
@@ -430,6 +503,8 @@
   function navigateToStock(code) {
     const url = config?.stockUrlPattern?.replace('{code}', code);
     if (url) {
+      // 跳轉前保存面板展開狀態
+      chrome.storage.local.set({ panelExpanded: isExpanded });
       currentStockCode = code;
       window.location.href = url;
     }
@@ -472,6 +547,113 @@
       if (wasDragged) {
         panel.addEventListener('click', (ev) => { ev.stopImmediatePropagation(); }, { once: true, capture: true });
       }
+    });
+  }
+
+  // ===== 清單拖曳排序 =====
+  function enableListReorder() {
+    let dragEl = null;
+    let placeholder = null;
+    let offsetY = 0;
+    let listEl = null;
+
+    panel.addEventListener('pointerdown', (e) => {
+      const handle = e.target.closest('[data-action="drag-handle"]');
+      if (!handle) return;
+
+      const wrap = handle.closest('.utr-item-wrap');
+      if (!wrap) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+
+      listEl = panel.querySelector('[data-role="watchlist"]');
+      if (!listEl) return;
+
+      dragEl = wrap;
+      const rect = dragEl.getBoundingClientRect();
+      const listRect = listEl.getBoundingClientRect();
+      startY = e.clientY;
+      offsetY = e.clientY - rect.top;
+
+      // 建立佔位元素
+      placeholder = document.createElement('div');
+      placeholder.className = 'utr-item-placeholder';
+      placeholder.style.height = rect.height + 'px';
+      dragEl.parentNode.insertBefore(placeholder, dragEl);
+
+      // 設定拖曳元素樣式
+      dragEl.classList.add('utr-item-wrap--dragging');
+      dragEl.style.width = rect.width + 'px';
+      dragEl.style.top = (rect.top - listRect.top + listEl.scrollTop) + 'px';
+
+      dragState = { pointerId: e.pointerId };
+    });
+
+    panel.addEventListener('pointermove', (e) => {
+      if (!dragEl || !dragState) return;
+
+      const listRect = listEl.getBoundingClientRect();
+      const newTop = e.clientY - offsetY - listRect.top + listEl.scrollTop;
+      dragEl.style.top = newTop + 'px';
+
+      // 尋找插入位置
+      const wraps = Array.from(listEl.querySelectorAll('.utr-item-wrap:not(.utr-item-wrap--dragging)'));
+      let inserted = false;
+      for (const w of wraps) {
+        const wRect = w.getBoundingClientRect();
+        const midY = wRect.top + wRect.height / 2;
+        if (e.clientY < midY) {
+          listEl.insertBefore(placeholder, w);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        listEl.appendChild(placeholder);
+      }
+    });
+
+    panel.addEventListener('pointerup', async () => {
+      if (!dragEl || !dragState) return;
+
+      // 將拖曳元素放到 placeholder 位置
+      placeholder.parentNode.insertBefore(dragEl, placeholder);
+      placeholder.remove();
+      dragEl.classList.remove('utr-item-wrap--dragging');
+      dragEl.style.width = '';
+      dragEl.style.top = '';
+
+      // 讀取新順序
+      const newOrder = Array.from(listEl.querySelectorAll('.utr-item-wrap'))
+        .map(el => el.dataset.dragCode)
+        .filter(Boolean);
+
+      const reordered = newOrder.map(code => watchlist.find(s => s.code === code)).filter(Boolean);
+
+      dragEl = null;
+      placeholder = null;
+      dragState = null;
+
+      if (reordered.length === watchlist.length) {
+        watchlist = reordered;
+        await chrome.runtime.sendMessage({
+          type: 'REORDER_WATCHLIST',
+          watchlist: reordered,
+        });
+      }
+    });
+
+    panel.addEventListener('pointercancel', () => {
+      if (!dragEl) return;
+      if (placeholder?.parentNode) placeholder.remove();
+      dragEl.classList.remove('utr-item-wrap--dragging');
+      dragEl.style.width = '';
+      dragEl.style.top = '';
+      dragEl = null;
+      placeholder = null;
+      dragState = null;
     });
   }
 
@@ -669,7 +851,7 @@
       .utr-dropdown-add:hover { background: rgba(99,102,241,0.25); color: #a5b4fc; }
 
       /* ========== 清單 ========== */
-      .utr-list { overflow-y: auto; flex: 1; min-height: 0; padding: 2px 6px 8px; }
+      .utr-list { overflow-y: auto; flex: 1; min-height: 0; padding: 2px 6px 8px; position: relative; }
       .utr-list::-webkit-scrollbar { width: 3px; }
       .utr-list::-webkit-scrollbar-track { background: transparent; }
       .utr-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 3px; }
@@ -677,6 +859,27 @@
       .utr-empty { text-align: center; color: rgba(255,255,255,0.18); font-size: 12px; padding: 24px 12px; }
 
       /* ========== 股票項目 ========== */
+      .utr-item-wrap { position: relative; }
+      .utr-item-wrap--dragging {
+        position: absolute;
+        z-index: 10;
+        opacity: 0.9;
+        pointer-events: none;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        border-radius: 10px;
+      }
+      .utr-item-placeholder {
+        border: 1px dashed rgba(99,102,241,0.35);
+        border-radius: 10px;
+        margin: 1px 0;
+        background: rgba(99,102,241,0.05);
+      }
+      .utr-drag-handle {
+        flex-shrink: 0; width: 18px; display: flex; align-items: center; justify-content: center;
+        color: rgba(255,255,255,0.1); cursor: grab; margin-right: 2px; touch-action: none;
+      }
+      .utr-drag-handle:active { cursor: grabbing; }
+      .utr-item:hover .utr-drag-handle { color: rgba(255,255,255,0.3); }
       .utr-item {
         display: flex; align-items: center; justify-content: space-between;
         padding: 9px 10px; margin: 1px 0; border-radius: 10px;
@@ -687,10 +890,11 @@
       .utr-item--active { background: rgba(99,102,241,0.07); border-color: rgba(99,102,241,0.18); }
       .utr-item--active .utr-item-code { color: #a5b4fc; }
       .utr-item--active .utr-item-name { color: rgba(255,255,255,0.7); }
-      .utr-item-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .utr-item-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
       .utr-item-code {
         font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.82);
-        font-variant-numeric: tabular-nums; min-width: 42px;
+        font-variant-numeric: tabular-nums; min-width: 52px; width: 52px; text-align: left;
+        flex-shrink: 0; font-family: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
       }
       .utr-item-name {
         font-size: 12px; color: rgba(255,255,255,0.3);
@@ -705,32 +909,24 @@
       .utr-item:hover .utr-item-del { opacity: 1; }
       .utr-item-del:hover { background: rgba(239,68,68,0.1); color: #f87171; }
 
-      /* ========== 時間週期列 ========== */
-      .utr-tf-bar {
-        display: flex; gap: 3px; padding: 4px 10px 8px;
-        animation: utr-slideDown 0.15s ease;
-      }
-      .utr-tf-btn {
-        flex: 1; padding: 4px 0; border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 6px; background: rgba(255,255,255,0.03);
-        color: rgba(255,255,255,0.4); font-size: 11px; font-weight: 500;
-        cursor: pointer; transition: all 0.12s;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      }
-      .utr-tf-btn:hover {
-        background: rgba(99,102,241,0.15); color: #a5b4fc;
-        border-color: rgba(99,102,241,0.25);
-      }
-      .utr-tf-btn:active { transform: scale(0.95); }
-
       /* ========== 時區切換區塊 ========== */
       .utr-tf-section {
         border-top: 1px solid rgba(255,255,255,0.05);
-        padding: 10px 12px;
       }
-      .utr-tf-current {
+      .utr-tf-header {
         display: flex; align-items: center; justify-content: space-between;
-        margin-bottom: 8px; padding: 0 2px;
+        padding: 10px 12px; cursor: pointer; transition: background 0.15s;
+      }
+      .utr-tf-header:hover { background: rgba(255,255,255,0.03); }
+      .utr-tf-header-left {
+        display: flex; align-items: center; gap: 10px;
+      }
+      .utr-tf-toggle {
+        color: rgba(255,255,255,0.25); display: flex; align-items: center;
+      }
+      .utr-tf-body {
+        padding: 0 10px 8px;
+        animation: utr-slideDown 0.15s ease;
       }
       .utr-tf-current-label {
         font-size: 11px; color: rgba(255,255,255,0.25); font-weight: 500;
@@ -739,25 +935,55 @@
         font-size: 13px; font-weight: 600; color: #a5b4fc;
         font-variant-numeric: tabular-nums;
       }
-      .utr-tf-grid {
-        display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px;
+
+      /* 分頁標籤列 */
+      .utr-tf-tabs {
+        display: flex; gap: 4px;
       }
-      .utr-tf-grid-btn {
-        padding: 8px 0; border: 1px solid rgba(255,255,255,0.06);
+      .utr-tf-tab {
+        flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;
+        padding: 7px 0; border: 1px solid rgba(255,255,255,0.06);
         border-radius: 8px; background: rgba(255,255,255,0.03);
-        color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 500;
-        cursor: pointer; transition: all 0.12s;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: rgba(255,255,255,0.45); font-size: 12px; font-weight: 500;
+        cursor: pointer; transition: all 0.15s;
+        font-family: inherit;
       }
-      .utr-tf-grid-btn:hover {
+      .utr-tf-tab:hover {
+        background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.7);
+        border-color: rgba(255,255,255,0.1);
+      }
+      .utr-tf-tab--active {
         background: rgba(99,102,241,0.15); color: #a5b4fc;
-        border-color: rgba(99,102,241,0.25);
+        border-color: rgba(99,102,241,0.35);
       }
-      .utr-tf-grid-btn--active {
-        background: rgba(99,102,241,0.2); color: #a5b4fc;
-        border-color: rgba(99,102,241,0.4);
+      .utr-tf-tab-chevron {
+        transition: transform 0.15s;
       }
-      .utr-tf-grid-btn:active { transform: scale(0.95); }
+
+      /* 下拉選單 */
+      .utr-tf-dropdown-list {
+        margin-top: 4px;
+        background: rgba(36,36,40,0.95);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 10px;
+        max-height: 240px; overflow-y: auto;
+        animation: utr-slideDown 0.15s ease;
+      }
+      .utr-tf-dropdown-list::-webkit-scrollbar { width: 3px; }
+      .utr-tf-dropdown-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+      .utr-tf-item {
+        padding: 9px 14px; cursor: pointer;
+        font-size: 13px; color: rgba(255,255,255,0.55);
+        transition: all 0.1s;
+      }
+      .utr-tf-item:first-child { border-radius: 10px 10px 0 0; }
+      .utr-tf-item:last-child { border-radius: 0 0 10px 10px; }
+      .utr-tf-item:hover {
+        background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.85);
+      }
+      .utr-tf-item--active {
+        background: rgba(59,130,246,0.15); color: #60a5fa;
+      }
 
       /* ========== 確認對話框 ========== */
       .utr-confirm-overlay {
